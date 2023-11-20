@@ -4,6 +4,7 @@ var jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
 
 // middleware
@@ -30,6 +31,7 @@ async function run() {
     const menuCollections = client.db("bistroDB").collection("menu");
     const reviewsCollections = client.db("bistroDB").collection("reviews");
     const cartsCollections = client.db("bistroDB").collection("carts");
+    const paymentsCollections = client.db("bistroDB").collection("payments");
 
     // jwt related api
     app.post("/jwt", async (req, res) => {
@@ -194,6 +196,43 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await cartsCollections.deleteOne(query);
       res.send(result);
+    });
+
+    // payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
+    app.get("/payments/:email", verifyToken, async (req, res) => {
+      const query = { email: req.params.email };
+      if (req.params.email !== req.decoded.email) {
+        return res.status(401).send({ message: "forbidden access" });
+      }
+      const result = await paymentsCollections.find(query).toArray();
+      res.send(result);
+    });
+
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+      const paymentResult = await paymentsCollections.insertOne(payment);
+
+      const query = {
+        _id: {
+          $in: payment.cartIds.map((id) => new ObjectId(id)),
+        },
+      };
+      const deleteResult = await cartsCollections.deleteMany(query);
+      res.send({ paymentResult, deleteResult });
     });
 
     // Send a ping to confirm a successful connection
